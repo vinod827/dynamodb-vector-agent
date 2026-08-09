@@ -1,0 +1,66 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Serverless RAG agent over DynamoDB native vector search
+
+# The table is created by infra/setup_table.py rather than here, because
+# CloudFormation support for the VectorIndexes property may lag the API.
+# Check the AWS::DynamoDB::Table reference before moving it into this template.
+
+Parameters:
+  TableName:
+    Type: String
+    Default: KnowledgeBase
+  VectorIndexName:
+    Type: String
+    Default: ContentVectorIndex
+  AgentModelId:
+    Type: String
+    Description: Bedrock model or inference profile id for the agent LLM
+  EmbedModelId:
+    Type: String
+    Default: amazon.titan-embed-text-v2:0
+
+Globals:
+  Function:
+    Runtime: python3.13
+    Timeout: 60
+    MemorySize: 1024
+    Architectures: [arm64]
+
+Resources:
+  AgentFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: agent/
+      Handler: handler.lambda_handler
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref TableName
+          VECTOR_INDEX_NAME: !Ref VectorIndexName
+          AGENT_MODEL_ID: !Ref AgentModelId
+          EMBED_MODEL_ID: !Ref EmbedModelId
+          EMBED_DIMENSIONS: "1024"
+          MAX_COSINE_DISTANCE: "0.85"
+      FunctionUrlConfig:
+        AuthType: AWS_IAM
+      Policies:
+        - Statement:
+            # dynamodb:SearchVectors is a NEW action - existing read policies do
+            # not include it - and the resource is the INDEX arn, not the table.
+            - Effect: Allow
+              Action: dynamodb:SearchVectors
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}/index/${VectorIndexName}
+            - Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource: "*"
+    Metadata:
+      BuildMethod: python3.13   # installs requirements.txt so a current boto3 ships with the code
+
+  # NOTE: do not attach a VPC config for the PoC. SearchVectors resolves to a
+  # separate search endpoint, so a DynamoDB gateway endpoint alone will let
+  # writes succeed while every search fails with an opaque connection error.
+
+Outputs:
+  AgentFunctionUrl:
+    Description: POST {"tenantId":"demo","question":"..."} here, signed with SigV4
+    Value: !GetAtt AgentFunctionUrl.FunctionUrl

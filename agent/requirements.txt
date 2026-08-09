@@ -1,0 +1,4 @@
+# The Lambda managed runtime ships an older SDK that does not know about
+# VectorIndexes / search_vectors. Bundle a current one.
+boto3>=1.43.64
+botocore>=1.43.64
